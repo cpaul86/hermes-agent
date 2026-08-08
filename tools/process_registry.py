@@ -43,7 +43,12 @@ import uuid
 from pathlib import Path
 
 _IS_WINDOWS = platform.system() == "Windows"
-from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
+from tools.environments.local import (
+    _find_shell,
+    _hermes_path_repair_commands,
+    _resolve_safe_cwd,
+    _sanitize_subprocess_env,
+)
 from hermes_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -53,6 +58,11 @@ from hermes_cli.config import get_hermes_home
 from agent.redact import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
+
+
+def _build_local_shell_command(command: str) -> str:
+    """Build a local login-shell command with Hermes' PATH invariant restored."""
+    return "; ".join(("set +m", *_hermes_path_repair_commands(), command))
 
 
 # Checkpoint file for crash recovery (gateway only)
@@ -1057,6 +1067,7 @@ class ProcessRegistry:
         from tools.terminal_tool import _rewrite_compound_background as _rewrite_bg
 
         safe_command = _rewrite_bg(command)
+        shell_command = _build_local_shell_command(safe_command)
 
         session = ProcessSession(
             id=f"proc_{uuid.uuid4().hex[:12]}",
@@ -1083,7 +1094,7 @@ class ProcessRegistry:
                 # cat, honoring any pager the user already exported.
                 pty_env.setdefault("GIT_PAGER", "cat")
                 pty_env.setdefault("PAGER", "cat")
-                pty_argv = [user_shell, "-lic", f"set +m; {safe_command}"]
+                pty_argv = [user_shell, "-lic", shell_command]
 
                 # Cgroup isolation for PTY mode (#70716, reviewer gap #1):
                 # Wrap the PTY command in a systemd scope so interactive
@@ -1166,7 +1177,7 @@ class ProcessRegistry:
         # kills only the worker instead of taking down the whole gateway
         # cgroup (and the messaging control plane with it). This applies to
         # both pipe mode and the PTY path above.
-        shell_argv = [user_shell, "-lic", f"set +m; {safe_command}"]
+        shell_argv = [user_shell, "-lic", shell_command]
         in_supervised_gateway = not _IS_WINDOWS and _is_supervised_gateway_process()
         use_systemd_scope = (
             in_supervised_gateway and _systemd_run_user_scope_available()

@@ -1653,6 +1653,28 @@ class TestHermesBinDirOnPath:
         monkeypatch.setattr(local_mod.os.path, "isdir", lambda p: p == "/opt/hermes/bin")
         assert local_mod._resolve_hermes_bin_dir() == "/opt/hermes/bin"
 
+    def test_prefers_sibling_deployment_launcher_over_venv_which(self, monkeypatch):
+        from tools.environments import local as local_mod
+
+        self._reset_cache()
+        monkeypatch.setattr(local_mod.sys, "executable", "/opt/hermes/.venv/bin/python")
+        monkeypatch.setattr(
+            local_mod.shutil,
+            "which",
+            lambda name: "/opt/hermes/.venv/bin/hermes" if name == "hermes" else None,
+        )
+        monkeypatch.setattr(
+            local_mod.os.path,
+            "isfile",
+            lambda path: path == "/opt/hermes/bin/hermes",
+        )
+        monkeypatch.setattr(local_mod.os.path, "isdir", lambda path: path == "/opt/hermes/bin")
+        monkeypatch.setattr(local_mod.os, "access", lambda path, mode: True)
+        try:
+            assert local_mod._resolve_hermes_bin_dir() == "/opt/hermes/bin"
+        finally:
+            self._reset_cache()
+
 
     def test_prepend_noop_when_unresolved(self, monkeypatch):
         from tools.environments import local as local_mod
@@ -1678,6 +1700,47 @@ class TestHermesBinDirOnPath:
         entries = result["PATH"].split(os.pathsep)
         assert entries[0] == "/opt/hermes/bin"
         assert "/usr/bin" in entries
+
+    def test_post_snapshot_repair_uses_git_bash_path_on_windows(self, monkeypatch):
+        from tools.environments import local as local_mod
+        from tools.environments.local import LocalEnvironment
+
+        self._reset_cache()
+        local_mod._HERMES_BIN_DIR = r"C:\Users\Test User\hermes\Scripts"
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        env = object.__new__(LocalEnvironment)
+        try:
+            commands = env._post_snapshot_restore_commands()
+            assert commands[0] == "__hermes_bin_dir='/c/Users/Test User/hermes/Scripts'"
+        finally:
+            self._reset_cache()
+
+    @pytest.mark.skipif(os.name == "nt", reason="uses a POSIX executable fixture")
+    def test_snapshot_cannot_remove_hermes_bin_dir(self, tmp_path):
+        """A persisted PATH must not undo the local runtime launcher invariant."""
+        from tools.environments import local as local_mod
+        from tools.environments.local import LocalEnvironment
+
+        fake_bin = tmp_path / "hermes bin"
+        fake_bin.mkdir()
+        fake_hermes = fake_bin / "hermes"
+        fake_hermes.write_text("#!/bin/sh\nprintf 'snapshot-safe\\n'\n")
+        fake_hermes.chmod(0o755)
+
+        local_mod._HERMES_BIN_DIR = str(fake_bin)
+        env = LocalEnvironment(cwd=str(tmp_path), timeout=10)
+        try:
+            with open(env._snapshot_path, "w", encoding="utf-8") as snapshot:
+                snapshot.write('declare -x PATH="/usr/bin:/bin"\n')
+            env._snapshot_ready = True
+            result = env.execute('printf "PATH=%s\\n" "$PATH"; command -v hermes && hermes', timeout=10)
+            assert result["returncode"] == 0
+            assert f"PATH={fake_bin}:/usr/bin:/bin" in result["output"]
+            assert str(fake_hermes) in result["output"]
+            assert "snapshot-safe" in result["output"]
+        finally:
+            env.cleanup()
+            self._reset_cache()
 
 
 class TestHermesInternalDynamicSecrets:

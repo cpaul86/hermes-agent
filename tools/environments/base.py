@@ -324,12 +324,22 @@ class BaseEnvironment(ABC):
         rewrite native/mixed Windows paths to ``/c/...``; remote backends are POSIX."""
         return shlex.quote(path)
 
+    def _post_snapshot_restore_commands(self) -> tuple[str, ...]:
+        """Backend-owned shell repairs applied after a session snapshot is sourced.
+
+        A snapshot intentionally preserves user environment changes, but it can
+        also carry a stale PATH. Backends with a runtime invariant may override
+        this hook; commands must not include user-controlled command data.
+        """
+        return ()
+
     def _wrap_command(self, command: str, cwd: str) -> str:
         """Full bash script: source snapshot, cd, run, re-dump env, emit CWD markers."""
         return _wrap_command_script(
             command,
             passthrough_names=self._snapshot_excluded_passthrough_names(),
             snapshot_ready=self._snapshot_ready,
+            post_snapshot_restore_commands=self._post_snapshot_restore_commands(),
             **self._snapshot_script_kwargs(cwd))
 
     @staticmethod

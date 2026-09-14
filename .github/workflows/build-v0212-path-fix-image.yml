@@ -1,0 +1,65 @@
+name: Build v0.21.2 PATH-fix image
+
+on:
+  push:
+    branches:
+      - release/v2026.9.11-path-fix
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: v0212-path-fix-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/cpaul86/hermes-agent
+
+jobs:
+  build-publish-amd64:
+    name: Build, smoke-test, and publish amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:v0212-path-fix-test
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=v0212-path-fix-amd64
+          cache-to: type=gha,mode=max,scope=v0212-path-fix-amd64
+
+      - name: Smoke-test launcher after PATH reset
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /opt/hermes/.venv/bin/python \
+            "${IMAGE}:v0212-path-fix-test" -c \
+            'import os, subprocess; from tools.environments.local import _hermes_path_repair_commands, _resolve_hermes_bin_dir; command="; ".join((*_hermes_path_repair_commands(), "test $(command -v hermes) = /opt/hermes/bin/hermes", "test $(command -v python3) = /usr/bin/python3")); result=subprocess.run(["/bin/bash", "-c", command], env={**os.environ, "PATH":"/usr/local/bin:/usr/bin:/bin"}); print(_resolve_hermes_bin_dir()); raise SystemExit(result.returncode)'
+
+      - name: Publish immutable discovery tag
+        run: |
+          set -euo pipefail
+          tag="v2026.9.11-path-fix-${GITHUB_SHA}"
+          docker tag "${IMAGE}:v0212-path-fix-test" "${IMAGE}:${tag}"
+          docker push "${IMAGE}:${tag}"
+          echo "Published ${IMAGE}:${tag}"

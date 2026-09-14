@@ -464,8 +464,8 @@ _HERMES_BIN_DIR: "str | None | object" = _SENTINEL
 def _resolve_hermes_bin_dir() -> str | None:
     """Directory holding the ``hermes`` console-script, or None (cached). A gateway
     launched by systemd/cron/a desktop launcher lacks the install dir on PATH and bare
-    ``hermes`` exits 127. Order: ``which``; absolute ``sys.argv[0]`` naming a real
-    hermes executable; ``sys.executable``'s dir if it holds the shim."""
+    ``hermes`` exits 127. Prefer the deployment launcher adjacent to an active
+    venv, then ``which``; absolute ``sys.argv[0]``; finally the venv shim."""
     global _HERMES_BIN_DIR
     if _HERMES_BIN_DIR is not _SENTINEL:
         return _HERMES_BIN_DIR  # type: ignore[return-value]
@@ -474,7 +474,10 @@ def _resolve_hermes_bin_dir() -> str | None:
     base = os.path.basename(argv0).lower()
     exe_dir = os.path.dirname(sys.executable) if sys.executable else ""
     shim = "hermes.exe" if _IS_WINDOWS else "hermes"
-    if which:
+    deployment_launcher = os.path.join(os.path.dirname(os.path.dirname(exe_dir)), "bin", shim)
+    if exe_dir and os.path.isfile(deployment_launcher) and os.access(deployment_launcher, os.X_OK):
+        candidate = os.path.dirname(deployment_launcher)
+    elif which:
         candidate = os.path.dirname(which)
     elif (os.path.isabs(argv0) and (base == "hermes" or base.startswith("hermes."))
             and os.path.isfile(argv0)):
@@ -489,6 +492,25 @@ def _prepend_hermes_bin_dir(existing_path: str) -> str:
     """Prepend the hermes install dir to ``existing_path`` if missing."""
     bin_dir = _resolve_hermes_bin_dir()
     return _prepend_missing_path_entries(existing_path, [bin_dir] if bin_dir else [])
+
+
+def _hermes_path_repair_commands() -> tuple[str, ...]:
+    """Shell commands that preserve the resolved Hermes launcher on PATH.
+
+    A login profile or persisted environment snapshot can replace PATH after
+    the child environment was sanitized. Keep this shell-side repair shared by
+    foreground, pipe-background and PTY execution.
+    """
+    bin_dir = _resolve_hermes_bin_dir()
+    if not bin_dir:
+        return ()
+    quoted_bin_dir = _quote_bash_path(bin_dir)
+    return (
+        f"__hermes_bin_dir={quoted_bin_dir}",
+        'case ":${PATH-}:" in *":$__hermes_bin_dir:"*) ;; '
+        '*) export PATH="$__hermes_bin_dir${PATH:+:$PATH}" ;; esac',
+        "unset __hermes_bin_dir",
+    )
 
 
 def _managed_runtime_path_entries() -> list[str]:
@@ -750,6 +772,10 @@ class LocalEnvironment(BaseEnvironment):
     def _quote_shell_path(self, path: str) -> str:
         """Rewrite native/mixed Windows paths before quoting for Git Bash."""
         return _quote_bash_path(path)
+
+    def _post_snapshot_restore_commands(self) -> tuple[str, ...]:
+        """Reassert the supported Hermes launcher after snapshot restore."""
+        return _hermes_path_repair_commands()
 
     def _recover_cwd(self) -> None:
         """Swap ``self.cwd`` for a usable directory if it vanished or is inaccessible

@@ -708,6 +708,29 @@ class TestPruning:
 # =========================================================================
 
 class TestSpawnEnvSanitization:
+    def test_local_shell_command_repairs_path_after_profile_reset(self, registry, tmp_path, monkeypatch):
+        from tools.environments import local as local_mod
+
+        runtime_bin = tmp_path / "hermes bin"
+        runtime_bin.mkdir()
+        hermes = runtime_bin / "hermes"
+        hermes.write_text("#!/bin/sh\nexit 0\n")
+        hermes.chmod(0o755)
+
+        monkeypatch.setattr(local_mod, "_resolve_hermes_bin_dir", lambda: str(runtime_bin))
+        session = _make_session(sid="proc_path_repair")
+        session.cwd = str(tmp_path)
+        with patch("tools.process_registry._find_shell", return_value="/bin/bash"):
+            argv = registry._scope_argv(session, "command -v hermes", session.id, "Local")
+        result = subprocess.run(
+            ["/bin/bash", "-c", f"export PATH=/usr/bin:/bin; {argv[2]}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(hermes)
+
     def test_spawn_local_strips_blocked_vars_from_background_env(self, registry):
         captured = {}
 

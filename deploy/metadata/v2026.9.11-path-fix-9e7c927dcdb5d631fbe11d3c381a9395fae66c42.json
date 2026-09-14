@@ -1,0 +1,6 @@
+{
+  "digest": "sha256:cd9c1c13d197d1f0982e2cff13c6e617ebc3ac98256c423dcdd14a8c7184e2bb",
+  "image": "ghcr.io/cpaul86/hermes-agent",
+  "source_commit": "9e7c927dcdb5d631fbe11d3c381a9395fae66c42",
+  "tag": "v2026.9.11-path-fix-9e7c927dcdb5d631fbe11d3c381a9395fae66c42"
+}

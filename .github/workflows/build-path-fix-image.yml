@@ -71,7 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="v2026.9.11-path-fix-${GITHUB_SHA}"
-          digest="$(docker buildx imagetools inspect --format '{{.Digest}}' "${IMAGE}:${tag}")"
+          docker buildx imagetools inspect --raw "${IMAGE}:${tag}" > /tmp/manifest.json
+          digest="sha256:$(sha256sum /tmp/manifest.json | cut -d' ' -f1)"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Unexpected manifest digest: $digest" >&2
             exit 1

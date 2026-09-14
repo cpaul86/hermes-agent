@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - release/v2026.9.11-path-fix
+    paths-ignore:
+      - deploy/metadata/**
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -63,3 +65,55 @@ jobs:
           docker tag "${IMAGE}:v0212-path-fix-test" "${IMAGE}:${tag}"
           docker push "${IMAGE}:${tag}"
           echo "Published ${IMAGE}:${tag}"
+
+      - name: Resolve published manifest digest
+        id: manifest
+        run: |
+          set -euo pipefail
+          tag="v2026.9.11-path-fix-${GITHUB_SHA}"
+          digest="$(docker buildx imagetools inspect --format '{{.Digest}}' "${IMAGE}:${tag}")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Unexpected manifest digest: $digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Write public build metadata
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          IMAGE_TAG: v2026.9.11-path-fix-${{ github.sha }}
+          IMAGE_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = {
+              "digest": os.environ["IMAGE_DIGEST"],
+              "image": os.environ["IMAGE"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "tag": os.environ["IMAGE_TAG"],
+          }
+          output = Path("deploy/metadata") / f"{metadata['tag']}.json"
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(output)
+          PY
+
+      - name: Commit build metadata
+        env:
+          IMAGE_TAG: v2026.9.11-path-fix-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          metadata="deploy/metadata/${IMAGE_TAG}.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$metadata"
+          if git diff --cached --quiet; then
+            echo "Metadata is already current"
+            exit 0
+          fi
+          git commit -m "chore: record PATH-fix image digest [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
